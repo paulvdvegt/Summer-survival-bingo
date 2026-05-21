@@ -129,10 +129,12 @@ function loadSession() { try { const s=localStorage.getItem("bingo_session"); re
 function clearSession() { try { localStorage.removeItem("bingo_session"); } catch{} }
 
 async function saveProgress(name, cardIndex, markedArr, bingo) {
+  const trimmed = (name||"").trim();
+  if (!trimmed) { console.warn("saveProgress: empty name, skipping"); return; }
   await sbFetch("bingo_progress?on_conflict=name", {
     method: "POST",
     headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify({ name, card_index:cardIndex, marked:markedArr, bingo, updated_at:new Date().toISOString() }),
+    body: JSON.stringify({ name: trimmed, card_index:cardIndex, marked:markedArr, bingo, updated_at:new Date().toISOString() }),
   });
 }
 async function loadProgress(name) {
@@ -217,8 +219,14 @@ function StartScreen({onStart,initialName="",initialCard=1,onResetAll}) {
 
   useEffect(()=>{
     refresh();
-    const t=setInterval(refresh,2000);
-    return ()=>clearInterval(t);
+    // Poll every 4s — reduces Supabase load with many players
+    const t=setInterval(()=>{
+      if(!document.hidden) refresh(); // skip when tab is in background
+    },4000);
+    // Also refresh when tab becomes visible again
+    const onVisible=()=>{ if(!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange",onVisible);
+    return ()=>{ clearInterval(t); document.removeEventListener("visibilitychange",onVisible); };
   },[refresh]);
 
   const handleResetAll=async()=>{
@@ -262,7 +270,7 @@ function StartScreen({onStart,initialName="",initialCard=1,onResetAll}) {
         <div style={{textAlign:"left",marginBottom:16}}>
           <label style={{display:"block",color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:13,marginBottom:5}}>{hasSaved?"Of nieuwe speler — Naam":"Jouw naam"}</label>
           <input value={name} onChange={e=>setName(e.target.value)} placeholder="bijv. Lisa"
-            onKeyDown={e=>e.key==="Enter"&&name.trim()&&onStart(name.trim(),cardNum-1)}
+            onKeyDown={e=>e.key==="Enter"&&name.trim().length>0&&onStart(name.trim(),cardNum-1)}
             style={{width:"100%",padding:"10px 14px",borderRadius:12,border:"2px solid rgba(255,255,255,0.4)",background:"rgba(255,255,255,0.92)",fontSize:15,fontFamily:"'Nunito',sans-serif",fontWeight:700,color:"#1a1a2e"}}/>
         </div>
 
@@ -406,10 +414,30 @@ function BingoCard({playerName,cardIndex,onReset}) {
 
   useEffect(()=>{
     setLoaded(false);
+    // Try Supabase first, fall back to localStorage cache
+    const cacheKey = `bingo_cache_${playerName}_${cardIndex}`;
     loadProgress(playerName).then(data=>{
-      if(data&&data.cardIndex===cardIndex&&Array.isArray(data.marked))
-        setMarked(new Set(data.marked));
-      else setMarked(new Set());
+      if(data&&data.cardIndex===cardIndex&&Array.isArray(data.marked)){
+        const s = new Set(data.marked);
+        setMarked(s);
+        // Update local cache
+        try { localStorage.setItem(cacheKey, JSON.stringify(data.marked)); } catch{}
+      } else {
+        // Try local cache as fallback
+        try {
+          const cached = localStorage.getItem(cacheKey);
+          if(cached) setMarked(new Set(JSON.parse(cached)));
+          else setMarked(new Set());
+        } catch { setMarked(new Set()); }
+      }
+      setLoaded(true);
+    }).catch(()=>{
+      // Network error — load from cache
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if(cached) setMarked(new Set(JSON.parse(cached)));
+        else setMarked(new Set());
+      } catch { setMarked(new Set()); }
       setLoaded(true);
     });
   },[playerName,cardIndex]);
@@ -422,6 +450,80 @@ function BingoCard({playerName,cardIndex,onReset}) {
   const bingo=bingoLines.length>0&&hasEnoughPhotos;
   const bingoCells=new Set(bingoLines.flat());
 
+  // Periodically check if someone else also has this card (duplicate detection)
+  const [conflictPlayer,setConflictPlayer]=useState(null);
+  useEffect(()=>{
+    let mounted=true;
+    const check=async()=>{
+      try {
+        const all=await loadAllProgress();
+        const others=all.filter(p=>p.cardIndex===cardIndex&&p.name!==playerName);
+        if(mounted) setConflictPlayer(others[0]||null);
+      } catch{}
+    };
+    check();
+    const t=setInterval(()=>{ if(!document.hidden) check(); },10000);
+    return ()=>{ mounted=false; clearInterval(t); };
+  },[playerName,cardIndex]);
+
+  // Pending save state: holds the LATEST data that needs to be sent
+  // If save fails, we keep retrying with the latest state
+  const pendingSave = useRef(null);
+  const retryTimer = useRef(null);
+  const maxWaitTimer = useRef(null);
+
+  const flushSave = useCallback(async()=>{
+    if (!pendingSave.current) return;
+    const { name, cardIdx, marked: markedArr, bingo } = pendingSave.current;
+    setSaveStatus("saving");
+    try {
+      await saveProgress(name, cardIdx, markedArr, bingo);
+      // Only clear pending if nothing new came in during the request
+      if (pendingSave.current &&
+          pendingSave.current.marked === markedArr &&
+          pendingSave.current.bingo === bingo) {
+        pendingSave.current = null;
+        setSaveStatus("saved");
+        if (maxWaitTimer.current) { clearTimeout(maxWaitTimer.current); maxWaitTimer.current = null; }
+      } else {
+        // New data arrived during save — flush again
+        flushSave();
+      }
+    } catch(e) {
+      console.error("Save failed, will retry", e);
+      setSaveStatus("error");
+      // Retry with exponential backoff: 2s, then keep at 5s
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+      retryTimer.current = setTimeout(flushSave, 5000);
+    }
+  }, []);
+
+  // Try to flush pending save when window regains focus or comes online
+  useEffect(()=>{
+    const tryFlush = () => { if (pendingSave.current) flushSave(); };
+    window.addEventListener("online", tryFlush);
+    window.addEventListener("focus", tryFlush);
+    document.addEventListener("visibilitychange", tryFlush);
+    return ()=>{
+      window.removeEventListener("online", tryFlush);
+      window.removeEventListener("focus", tryFlush);
+      document.removeEventListener("visibilitychange", tryFlush);
+    };
+  },[flushSave]);
+
+  // Warn user if they try to close the tab with unsaved changes
+  useEffect(()=>{
+    const handler = (e) => {
+      if (pendingSave.current) {
+        e.preventDefault();
+        e.returnValue = "Je voortgang wordt nog opgeslagen. Even wachten voor je afsluit!";
+        return e.returnValue;
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return ()=>window.removeEventListener("beforeunload", handler);
+  },[]);
+
   const toggle=useCallback((idx)=>{
     if(!loaded)return;
     setMarked(prev=>{
@@ -430,16 +532,28 @@ function BingoCard({playerName,cardIndex,onReset}) {
       const nm=[...s];
       const ph=card.cells.filter((t,i)=>PHOTO_PROOF_ITEMS.has(t)&&s.has(i)).length;
       const b=getBingoLines(s).length>0&&ph>=3;
+      // 1. Save to local cache IMMEDIATELY (cannot fail)
+      const cacheKey = `bingo_cache_${playerName}_${cardIndex}`;
+      try { localStorage.setItem(cacheKey, JSON.stringify(nm)); } catch{}
+      // 2. Queue the save (overwrites any pending)
+      pendingSave.current = { name: playerName, cardIdx: cardIndex, marked: nm, bingo: b };
       setSaveStatus("saving");
+      // 3. Debounce: clear any existing retry, start a fresh 600ms timer
       if(saveTimer.current)clearTimeout(saveTimer.current);
-      saveTimer.current=setTimeout(()=>{
-        saveProgress(playerName,cardIndex,nm,b)
-          .then(()=>setSaveStatus("saved"))
-          .catch(()=>setSaveStatus("error"));
-      },200);
+      if(retryTimer.current)clearTimeout(retryTimer.current);
+      // Debounce: every click resets the 2s timer
+      // But: maxWait ensures we save at least every 5s even if user keeps clicking
+      saveTimer.current=setTimeout(flushSave, 2000);
+      if (!maxWaitTimer.current) {
+        maxWaitTimer.current = setTimeout(()=>{
+          maxWaitTimer.current = null;
+          if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+          flushSave();
+        }, 5000);
+      }
       return s;
     });
-  },[playerName,cardIndex,card.cells,loaded]);
+  },[playerName,cardIndex,card.cells,loaded,flushSave]);
 
   const handlePrint=()=>{
     setPrintMode(true);
@@ -515,6 +629,17 @@ function BingoCard({playerName,cardIndex,onReset}) {
           {!hasEnoughPhotos&&<span style={{color:"rgba(255,200,200,0.9)",fontFamily:"'Nunito',sans-serif",fontSize:11,width:"100%"}}>Vink nog {3-photoCount} 📸-item{3-photoCount!==1?"s":""} aan om bingo te claimen</span>}
         </div>
 
+        {conflictPlayer && (
+          <div className="glass" style={{
+            borderRadius:13,padding:"9px 14px",marginBottom:10,
+            color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:12,
+            background:"rgba(220,140,0,0.7)",textAlign:"center",
+            border:"1.5px solid rgba(255,200,0,0.6)",
+          }}>
+            ⚠️ Let op: <strong>{conflictPlayer.name}</strong> heeft ook kaart {cardIndex+1}.<br/>
+            <span style={{fontSize:11,opacity:0.9}}>Jullie zien dezelfde vakjes maar elk eigen voortgang.</span>
+          </div>
+        )}
         {bingo?(
           <div className="pop float glass" style={{borderRadius:16,padding:"11px 22px",marginBottom:11,fontSize:22,color:"#1a1a2e",letterSpacing:1.5,textAlign:"center",background:"rgba(255,226,89,0.93)",border:"2px solid rgba(255,200,0,0.9)"}}>
             🎉 BINGO, {playerName}! 🎉<br/>
@@ -577,10 +702,20 @@ function App() {
   if(!state.ready)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(145deg,#0f4c75,#1b6ca8)",color:"#fff",fontSize:20,fontFamily:"system-ui"}}>☀️ Laden…</div>;
   if(state.player)return <BingoCard playerName={state.player.name} cardIndex={state.player.cardIndex} onReset={()=>setState(s=>({...s,player:null}))}/>;
   return <StartScreen
-    onStart={(n,c)=>{
-      setState(s=>({...s,player:{name:n,cardIndex:c},savedName:n,savedCard:c+1}));
-      // Register immediately so card shows as taken for others
-      saveProgress(n,c,[],false).catch(console.error);
+    onStart={async(n,c)=>{
+      const trimmedName = n.trim();
+      if (!trimmedName) return;
+      // LIVE check: is this card already taken by someone else?
+      try {
+        const all = await loadAllProgress();
+        const conflict = all.find(p=>p.cardIndex===c && p.name!==trimmedName);
+        if (conflict) {
+          alert(`⚠️ Kaart ${c+1} is net gepakt door ${conflict.name}!\nKies een andere kaart.`);
+          return;
+        }
+      } catch(e) { console.error("Pre-claim check failed",e); }
+      setState(s=>({...s,player:{name:trimmedName,cardIndex:c},savedName:trimmedName,savedCard:c+1}));
+      saveProgress(trimmedName,c,[],false).catch(console.error);
     }}
     initialName={state.savedName} initialCard={state.savedCard}
     onResetAll={()=>setState({player:null,savedName:"",savedCard:1,ready:true})}
