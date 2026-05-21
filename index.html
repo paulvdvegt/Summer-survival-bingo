@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>☀️ Summer Survival Bingo</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;700;800&display=swap" rel="stylesheet"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f4c75; }
+    input:focus { outline: 3px solid #ffe259 !important; }
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+    @keyframes pop { 0%{transform:scale(1)} 40%{transform:scale(1.14)} 100%{transform:scale(1)} }
+    @keyframes spin { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+    .float { animation: float 3s ease-in-out infinite; }
+    .pop { animation: pop 0.45s ease; }
+    .spin { display:inline-block; animation: spin 10s linear infinite; }
+    .glass {
+      background: rgba(255,255,255,0.18);
+      backdrop-filter: blur(18px) saturate(160%);
+      -webkit-backdrop-filter: blur(18px) saturate(160%);
+      border: 1.5px solid rgba(255,255,255,0.45);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+    }
+    .cell { cursor:pointer; transition:transform 0.13s,filter 0.13s; user-select:none; position:relative; }
+    .cell:hover { transform:scale(1.05); filter:brightness(1.08); }
+    .cell.on { transform:scale(0.97); }
+    .cell.glow { box-shadow:0 0 0 3px #ffe259,0 0 20px 5px rgba(255,226,89,0.5)!important; }
+    .bg-layer { position:fixed;inset:0;z-index:0; }
+    .overlay { position:fixed;inset:0;z-index:1;background:rgba(0,0,0,0.38); }
+    .content { position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;padding:18px 13px 30px; }
+    @media print {
+      .no-print { display:none!important; }
+      .bg-layer,.overlay { display:none!important; }
+      .content { position:static!important; padding:8px!important; }
+      .glass { background:rgba(255,255,255,0.95)!important; backdrop-filter:none!important; border:1px solid #ddd!important; }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const ALL_ITEMS = [
+  '"we hebben een openstaande dienst"',
+  "Tropenrooster van start",
+  "Dienst ruilen met collega",
+  "IJsjes eten na een route",
+  "25 graden in de woonkamer van client",
+  "Collega komt bruin terug",
+  "Computer/telefoon loopt vast door hitte",
+  "Bijna vakantie",
+  "Creatief omgaan om drinken koud te houden in de auto",
+  "Client biedt koffie aan bij 32 graden",
+  "Vakantiefoto tijdens werken",
+  "Ventilator maakt meer lawaai dan wind",
+  "Zweet meteen na aanbellen",
+  '"Kun je nog heel even\u2026"',
+  "Alle deuren en ramen staan open midden op de dag",
+  "Client draagt iets gels",
+  "Zoek iets flamingo's",
+  "Neem een zomerse snack mee voor collega's",
+  "Draag een zomers attribuut",
+  "Avonddienst met noodweer",
+  "Zonnecrème in de auto vergeten",
+  "File door vakantiedrukte",
+  "Collega met zonnebril binnen",
+  "Airco kapot op heetste dag",
+  "IJsje aangeboden door client",
+  "Auto als sauna na parkeren in zon",
+  "Vergadering buiten in de zon",
+  "Muggenbeut op dienst",
+  "Collega neemt paraplu mee op zonnige dag",
+  "Thermoskan met ijskoffie",
+  "Terrasje na dienst",
+  "Slippers bij client thuis",
+  "Barbecue-geur tijdens huisbezoek",
+];
+
+const PHOTO_PROOF_ITEMS = new Set([
+  "IJsjes eten na een route",
+  "Draag een zomers attribuut",
+  "Neem een zomerse snack mee voor collega's",
+  "Zoek iets flamingo's",
+  "Collega komt bruin terug",
+  "Vakantiefoto tijdens werken",
+  "Collega met zonnebril binnen",
+  "Terrasje na dienst",
+  "IJsje aangeboden door client",
+  "Vergadering buiten in de zon",
+]);
+
+const BACKGROUNDS = [
+  { name:"Strand", emoji:"🏖️", css:"linear-gradient(180deg,#87CEEB 0%,#87CEEB 45%,#F5DEB3 45%,#F5DEB3 65%,#C2956C 65%)" },
+  { name:"Tropische Nacht", emoji:"🌙", css:"linear-gradient(160deg,#0d1b2a 0%,#1b2838 40%,#0f3d2e 75%,#1a4a30 100%)" },
+  { name:"Flamingo Vibes", emoji:"🦩", css:"linear-gradient(135deg,#ff9eb5 0%,#ffccd5 35%,#ffdde1 55%,#c8e6ff 85%,#a8d8ff 100%)" },
+  { name:"Watermeloen", emoji:"🍉", css:"linear-gradient(160deg,#ff4d6d 0%,#ff758f 40%,#56ab2f 75%,#a8e063 100%)" },
+  { name:"Zonnebloemen", emoji:"🌻", css:"linear-gradient(170deg,#87CEEB 0%,#b0e0ff 30%,#ffe082 65%,#ffb300 100%)" },
+  { name:"Pool Party", emoji:"🏊", css:"linear-gradient(180deg,#ffe082 0%,#fff9c4 15%,#29b6f6 35%,#0288d1 70%,#01579b 100%)" },
+  { name:"IJsjes", emoji:"🍦", css:"linear-gradient(145deg,#fce4ec 0%,#f8bbd0 25%,#e1f5fe 55%,#b3e5fc 80%,#e8f5e9 100%)" },
+  { name:"Zonsondergang", emoji:"🌅", css:"linear-gradient(180deg,#1a1a3e 0%,#6b2fa0 20%,#d4145a 45%,#f86f3a 65%,#ffd700 80%,#ffe082 100%)" },
+  { name:"Regenboog", emoji:"🌈", css:"linear-gradient(160deg,#e0f7fa 0%,#b2ebf2 30%,#e8f5e9 60%,#fff9c4 85%,#fce4ec 100%)" },
+  { name:"BBQ Avond", emoji:"🔥", css:"linear-gradient(160deg,#1a0a00 0%,#3d1a00 30%,#7a2800 60%,#c94f00 80%,#ff8c00 100%)" },
+];
+
+const SUPABASE_URL = "https://hxrilpduwyzpltddsxwo.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh4cmlscGR1d3l6cGx0ZGRzeHdvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzMDY5ODEsImV4cCI6MjA5NDg4Mjk4MX0.IRoVetmZZMbdLp9kHF_avy2F_vvkyfbUnOAMm9011Hg";
+const SB_HEADERS = { "Content-Type":"application/json", "apikey":SUPABASE_KEY, "Authorization":`Bearer ${SUPABASE_KEY}` };
+
+async function sbFetch(path, opts={}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...opts, headers:{ ...SB_HEADERS, ...(opts.headers||{}) } });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+  return res.status === 204 ? null : res.json();
+}
+
+function saveSession(name, cardIndex) { try { localStorage.setItem("bingo_session", JSON.stringify({name,cardIndex})); } catch{} }
+function loadSession() { try { const s=localStorage.getItem("bingo_session"); return s?JSON.parse(s):null; } catch{return null;} }
+function clearSession() { try { localStorage.removeItem("bingo_session"); } catch{} }
+
+async function saveProgress(name, cardIndex, markedArr, bingo) {
+  await sbFetch("bingo_progress", {
+    method:"POST",
+    headers:{...SB_HEADERS,"Prefer":"resolution=merge-duplicates"},
+    body:JSON.stringify({ name, card_index:cardIndex, marked:markedArr, bingo, updated_at:new Date().toISOString() }),
+  });
+}
+async function loadProgress(name) {
+  try {
+    const rows = await sbFetch(`bingo_progress?name=eq.${encodeURIComponent(name)}&limit=1`);
+    if (!rows||!rows.length) return null;
+    const r=rows[0];
+    return { name:r.name, cardIndex:r.card_index, marked:r.marked||[], bingo:r.bingo };
+  } catch(e) { console.error(e); return null; }
+}
+async function loadAllProgress() {
+  try {
+    const rows = await sbFetch("bingo_progress?order=updated_at.desc");
+    return (rows||[]).map(r=>({ name:r.name, cardIndex:r.card_index, marked:r.marked||[], bingo:r.bingo }));
+  } catch(e) { console.error(e); return []; }
+}
+async function resetAllProgress() {
+  try { await sbFetch("bingo_progress?name=neq.___none___",{method:"DELETE"}); clearSession(); return true; }
+  catch(e) { console.error(e); return false; }
+}
+
+function seededRandom(seed) {
+  let s=seed;
+  return ()=>{ s=(s*1664525+1013904223)&0xffffffff; return (s>>>0)/0xffffffff; };
+}
+function seededShuffle(arr,seed) {
+  const a=[...arr],rand=seededRandom(seed);
+  for(let i=a.length-1;i>0;i--){const j=Math.floor(rand()*(i+1));[a[i],a[j]]=[a[j],a[i]];}
+  return a;
+}
+function generateCard(n) {
+  const cells=seededShuffle(ALL_ITEMS,n*9973+12345).slice(0,16);
+  const onCard=cells.filter(c=>PHOTO_PROOF_ITEMS.has(c));
+  if(onCard.length<3){
+    const missing=[...PHOTO_PROOF_ITEMS].filter(p=>!cells.includes(p));
+    let mi=0;
+    for(let i=0;i<cells.length&&cells.filter(c=>PHOTO_PROOF_ITEMS.has(c)).length<3;i++)
+      if(!PHOTO_PROOF_ITEMS.has(cells[i])&&missing[mi])cells[i]=missing[mi++];
+  }
+  return {cells,bg:BACKGROUNDS[n%BACKGROUNDS.length],cardNumber:n+1};
+}
+const CARDS=Array.from({length:30},(_,i)=>generateCard(i));
+
+function getBingoLines(marked) {
+  const lines=[];
+  for(let r=0;r<4;r++){const row=[0,1,2,3].map(c=>r*4+c);if(row.every(i=>marked.has(i)))lines.push(row);}
+  for(let c=0;c<4;c++){const col=[0,1,2,3].map(r=>r*4+c);if(col.every(i=>marked.has(i)))lines.push(col);}
+  if([0,5,10,15].every(i=>marked.has(i)))lines.push([0,5,10,15]);
+  if([3,6,9,12].every(i=>marked.has(i)))lines.push([3,6,9,12]);
+  return lines;
+}
+
+function StartScreen({onStart,initialName="",initialCard=1,onResetAll}) {
+  const [name,setName]=useState(initialName);
+  const [cardNum,setCardNum]=useState(initialCard);
+  const [players,setPlayers]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [confirmReset,setConfirmReset]=useState(false);
+  const [resetting,setResetting]=useState(false);
+
+  const refresh=useCallback(()=>{
+    loadAllProgress().then(list=>{setPlayers(list);setLoading(false);});
+  },[]);
+
+  useEffect(()=>{
+    refresh();
+    const t=setInterval(refresh,8000);
+    return ()=>clearInterval(t);
+  },[refresh]);
+
+  const handleResetAll=async()=>{
+    setResetting(true);
+    await resetAllProgress();
+    setPlayers([]);setResetting(false);setConfirmReset(false);
+    if(onResetAll)onResetAll();
+  };
+
+  const mergedPlayers=(()=>{
+    const map=new Map(players.map(p=>[p.name,p]));
+    if(initialName&&!map.has(initialName))
+      map.set(initialName,{name:initialName,cardIndex:initialCard-1,marked:[],bingo:false});
+    return [...map.values()];
+  })();
+
+  const sortedPlayers=[...mergedPlayers].sort((a,b)=>{
+    if(a.bingo&&!b.bingo)return -1;
+    if(!a.bingo&&b.bingo)return 1;
+    return (b.marked?.length||0)-(a.marked?.length||0);
+  });
+
+  const hasSaved=initialName!=="";
+
+  return (
+    <div style={{minHeight:"100vh",fontFamily:"'Fredoka One',cursive",background:"linear-gradient(145deg,#0f4c75,#1b6ca8,#118ab2,#06d6a0)",display:"flex",flexDirection:"column",alignItems:"center",padding:"24px 16px"}}>
+      <div style={{background:"rgba(255,255,255,0.15)",backdropFilter:"blur(20px)",border:"2px solid rgba(255,255,255,0.4)",borderRadius:28,padding:"28px 28px 24px",maxWidth:420,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.3)",textAlign:"center",marginBottom:18}}>
+        <div className="float" style={{fontSize:48,marginBottom:6}}>☀️</div>
+        <h1 style={{margin:"0 0 3px",fontSize:34,color:"#fff",textShadow:"0 2px 14px rgba(0,0,0,0.35)"}}>Summer Survival</h1>
+        <p style={{color:"rgba(255,255,255,0.75)",fontFamily:"'Nunito',sans-serif",fontSize:13,margin:"0 0 22px"}}>Bingo voor op het werk 🌴</p>
+
+        {hasSaved&&(
+          <div style={{background:"rgba(255,226,89,0.2)",border:"1.5px solid rgba(255,226,89,0.5)",borderRadius:13,padding:"10px 14px",marginBottom:16,textAlign:"left"}}>
+            <p style={{margin:0,color:"#fff",fontFamily:"'Nunito',sans-serif",fontSize:12,fontWeight:700}}>👋 Welkom terug, {initialName}!</p>
+            <button onClick={()=>onStart(initialName,initialCard-1)} style={{marginTop:8,width:"100%",padding:"10px",borderRadius:11,border:"none",background:"rgba(255,226,89,0.95)",color:"#1a1a2e",fontSize:15,fontFamily:"'Fredoka One',cursive",cursor:"pointer",boxShadow:"0 3px 14px rgba(255,200,0,0.4)"}}>
+              ▶️ Verder met kaart {initialCard}
+            </button>
+          </div>
+        )}
+
+        <div style={{textAlign:"left",marginBottom:16}}>
+          <label style={{display:"block",color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:13,marginBottom:5}}>{hasSaved?"Of nieuwe speler — Naam":"Jouw naam"}</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="bijv. Lisa"
+            onKeyDown={e=>e.key==="Enter"&&name.trim()&&onStart(name.trim(),cardNum-1)}
+            style={{width:"100%",padding:"10px 14px",borderRadius:12,border:"2px solid rgba(255,255,255,0.4)",background:"rgba(255,255,255,0.92)",fontSize:15,fontFamily:"'Nunito',sans-serif",fontWeight:700,color:"#1a1a2e"}}/>
+        </div>
+
+        <div style={{textAlign:"left",marginBottom:22}}>
+          <label style={{display:"block",color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:13,marginBottom:5}}>Kaartnummer (1–30)</label>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <input type="range" min={1} max={30} value={cardNum} onChange={e=>setCardNum(Number(e.target.value))} style={{flex:1,accentColor:"#ffe259"}}/>
+            <span style={{background:"rgba(255,226,89,0.92)",borderRadius:10,padding:"5px 12px",fontFamily:"'Fredoka One',cursive",fontSize:20,color:"#1a1a2e",minWidth:40,textAlign:"center"}}>{cardNum}</span>
+          </div>
+        </div>
+
+        <button onClick={()=>name.trim()&&onStart(name.trim(),cardNum-1)} disabled={!name.trim()}
+          style={{width:"100%",padding:13,borderRadius:14,border:"2px solid rgba(255,255,255,0.4)",background:name.trim()?"rgba(255,255,255,0.25)":"rgba(255,255,255,0.1)",color:name.trim()?"#fff":"rgba(255,255,255,0.4)",fontSize:17,fontFamily:"'Fredoka One',cursive",cursor:name.trim()?"pointer":"default"}}>
+          🎯 {hasSaved?"Andere speler":"Start Bingo!"}
+        </button>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.12)",backdropFilter:"blur(16px)",border:"1.5px solid rgba(255,255,255,0.35)",borderRadius:22,padding:"18px 20px",maxWidth:420,width:"100%"}}>
+        <h2 style={{margin:"0 0 12px",fontSize:18,color:"#fff",textAlign:"center"}}>🏆 Team Voortgang</h2>
+
+        {loading?(
+          <p style={{color:"rgba(255,255,255,0.6)",fontFamily:"'Nunito',sans-serif",fontSize:13,textAlign:"center",margin:"20px 0"}}>Laden…</p>
+        ):sortedPlayers.length===0?(
+          <div style={{textAlign:"center",padding:"16px 8px"}}>
+            <div style={{fontSize:36,marginBottom:6,opacity:0.6}}>🌴</div>
+            <p style={{color:"rgba(255,255,255,0.75)",fontFamily:"'Nunito',sans-serif",fontSize:13,margin:"0 0 4px",fontWeight:700}}>Nog geen spelers</p>
+            <p style={{color:"rgba(255,255,255,0.5)",fontFamily:"'Nunito',sans-serif",fontSize:11,margin:0}}>Zodra jij of een collega begint, verschijnt hier de voortgang.</p>
+          </div>
+        ):(
+          <>
+            {sortedPlayers.map((p,i)=>{
+              const arr=p.marked||[];
+              const pct=Math.round((arr.length/16)*100);
+              const pc=CARDS[p.cardIndex]?.cells.filter((c,idx)=>PHOTO_PROOF_ITEMS.has(c)&&arr.includes(idx)).length||0;
+              const isMij=p.name===initialName;
+              return (
+                <div key={p.name} style={{marginBottom:10,background:isMij?"rgba(255,226,89,0.12)":"transparent",borderRadius:isMij?10:0,padding:isMij?"6px 8px":0,border:isMij?"1px solid rgba(255,226,89,0.3)":"none"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3,gap:6}}>
+                    <span style={{color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:13,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {p.bingo?"🎉 ":i===0&&!p.bingo?"🥇 ":""}{p.name}{isMij?" (jij)":""}
+                      {p.bingo&&<span style={{color:"#ffe259",marginLeft:5,fontSize:11}}>BINGO!</span>}
+                    </span>
+                    <span style={{color:"rgba(255,255,255,0.7)",fontFamily:"'Nunito',sans-serif",fontSize:11,whiteSpace:"nowrap"}}>{arr.length}/16 · 📸{pc}</span>
+                  </div>
+                  <div style={{height:9,borderRadius:5,background:"rgba(255,255,255,0.15)",overflow:"hidden"}}>
+                    <div style={{height:"100%",borderRadius:5,width:`${pct}%`,background:p.bingo?"linear-gradient(90deg,#ffe259,#ffa000)":"linear-gradient(90deg,#06d6a0,#118ab2)",transition:"width 0.5s"}}/>
+                  </div>
+                </div>
+              );
+            })}
+            <p style={{margin:"10px 0 0",color:"rgba(255,255,255,0.45)",fontFamily:"'Nunito',sans-serif",fontSize:10,textAlign:"center"}}>Vernieuwd elke 8 sec · Gedeeld met het hele team</p>
+          </>
+        )}
+
+        {!loading&&players.length>0&&(
+          <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid rgba(255,255,255,0.15)",textAlign:"center"}}>
+            <button onClick={()=>setConfirmReset(true)} style={{background:"rgba(220,60,60,0.25)",border:"1.5px solid rgba(255,120,120,0.5)",borderRadius:10,padding:"7px 16px",fontSize:12,cursor:"pointer",color:"#ffd4d4",fontFamily:"'Nunito',sans-serif",fontWeight:800}}>
+              🗑️ Reset alle voortgang
+            </button>
+            <p style={{margin:"6px 0 0",color:"rgba(255,255,255,0.4)",fontFamily:"'Nunito',sans-serif",fontSize:10}}>Voor een nieuwe ronde — wist alle voortgang voor iedereen</p>
+          </div>
+        )}
+      </div>
+
+      {confirmReset&&(
+        <div style={{position:"fixed",inset:0,zIndex:100,background:"rgba(0,0,0,0.65)",backdropFilter:"blur(6px)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>!resetting&&setConfirmReset(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"linear-gradient(145deg,#2a1a3a,#1a2540)",border:"2px solid rgba(255,120,120,0.4)",borderRadius:22,padding:"28px 26px",maxWidth:380,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.5)",textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:8}}>⚠️</div>
+            <h2 style={{margin:"0 0 8px",color:"#fff",fontSize:22,fontFamily:"'Fredoka One',cursive"}}>Alles resetten?</h2>
+            <p style={{margin:"0 0 6px",color:"rgba(255,255,255,0.85)",fontFamily:"'Nunito',sans-serif",fontSize:14,fontWeight:600,lineHeight:1.4}}>Dit wist <strong>alle voortgang van iedereen</strong> in het team.</p>
+            <p style={{margin:"0 0 16px",color:"rgba(255,180,180,0.9)",fontFamily:"'Nunito',sans-serif",fontSize:12,fontWeight:700}}>Deze actie kan niet ongedaan gemaakt worden.</p>
+            {players.length>0&&(
+              <p style={{margin:"0 0 18px",color:"rgba(255,255,255,0.6)",fontFamily:"'Nunito',sans-serif",fontSize:11,background:"rgba(0,0,0,0.25)",padding:"8px 12px",borderRadius:10}}>
+                {players.length} speler{players.length!==1?"s":""} wordt{players.length===1?"":"en"} gewist:<br/>
+                <strong style={{color:"rgba(255,255,255,0.85)"}}>{players.map(p=>p.name).join(", ")}</strong>
+              </p>
+            )}
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setConfirmReset(false)} disabled={resetting} style={{flex:1,padding:"11px",borderRadius:13,background:"rgba(255,255,255,0.15)",border:"1.5px solid rgba(255,255,255,0.3)",color:"#fff",fontSize:15,fontFamily:"'Fredoka One',cursive",cursor:resetting?"default":"pointer",opacity:resetting?0.5:1}}>Annuleren</button>
+              <button onClick={handleResetAll} disabled={resetting} style={{flex:1,padding:"11px",borderRadius:13,background:"rgba(220,60,60,0.85)",border:"1.5px solid rgba(255,120,120,0.7)",color:"#fff",fontSize:15,fontFamily:"'Fredoka One',cursive",cursor:resetting?"default":"pointer"}}>
+                {resetting?"Bezig…":"🗑️ Ja, reset"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BingoCard({playerName,cardIndex,onReset}) {
+  const card=CARDS[cardIndex];
+  const [marked,setMarked]=useState(new Set());
+  const [loaded,setLoaded]=useState(false);
+  const [saveStatus,setSaveStatus]=useState("saved");
+  const [printMode,setPrintMode]=useState(false);
+  const saveTimer=useRef(null);
+
+  useEffect(()=>{
+    setLoaded(false);
+    loadProgress(playerName).then(data=>{
+      if(data&&data.cardIndex===cardIndex&&Array.isArray(data.marked))
+        setMarked(new Set(data.marked));
+      else setMarked(new Set());
+      setLoaded(true);
+    });
+  },[playerName,cardIndex]);
+
+  useEffect(()=>{ saveSession(playerName,cardIndex); },[playerName,cardIndex]);
+
+  const photoCount=card.cells.filter((t,i)=>PHOTO_PROOF_ITEMS.has(t)&&marked.has(i)).length;
+  const hasEnoughPhotos=photoCount>=3;
+  const bingoLines=getBingoLines(marked);
+  const bingo=bingoLines.length>0&&hasEnoughPhotos;
+  const bingoCells=new Set(bingoLines.flat());
+
+  const toggle=useCallback((idx)=>{
+    if(!loaded)return;
+    setMarked(prev=>{
+      const s=new Set(prev);
+      if(s.has(idx))s.delete(idx);else s.add(idx);
+      const nm=[...s];
+      const ph=card.cells.filter((t,i)=>PHOTO_PROOF_ITEMS.has(t)&&s.has(i)).length;
+      const b=getBingoLines(s).length>0&&ph>=3;
+      setSaveStatus("saving");
+      if(saveTimer.current)clearTimeout(saveTimer.current);
+      saveTimer.current=setTimeout(()=>{
+        saveProgress(playerName,cardIndex,nm,b)
+          .then(()=>setSaveStatus("saved"))
+          .catch(()=>setSaveStatus("error"));
+      },200);
+      return s;
+    });
+  },[playerName,cardIndex,card.cells,loaded]);
+
+  const handlePrint=()=>{
+    setPrintMode(true);
+    setTimeout(()=>{ window.print(); setTimeout(()=>setPrintMode(false),500); },200);
+  };
+
+  const {css,name:bgName,emoji}=card.bg;
+
+  if(printMode){
+    return (
+      <div style={{padding:"24px",fontFamily:"Arial,sans-serif",background:"#fff",minHeight:"100vh"}}>
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <h1 style={{margin:"0 0 4px",fontSize:30,color:"#c94f00"}}>☀️ Summer Survival Bingo</h1>
+          <p style={{margin:0,fontSize:14,color:"#666"}}><strong>{playerName}</strong> · Kaart {card.cardNumber} van 30 · {emoji} {bgName}</p>
+          <p style={{margin:"4px 0 0",fontSize:12,color:"#999"}}>📸 = foto als bewijslast · Bingo bij 1 volledige rij + min. 3 📸-items</p>
+        </div>
+        <table style={{width:"100%",borderCollapse:"collapse",border:"3px solid #c94f00",tableLayout:"fixed"}}>
+          <tbody>
+            {[0,1,2,3].map(r=>(
+              <tr key={r}>
+                {[0,1,2,3].map(c=>{
+                  const idx=r*4+c,text=card.cells[idx];
+                  const isPhoto=PHOTO_PROOF_ITEMS.has(text),isMarked=marked.has(idx);
+                  return <td key={c} style={{border:"2px solid #d4945a",padding:"12px 8px",textAlign:"center",fontSize:11,fontWeight:600,background:isMarked?"#ffe082":isPhoto?"#fff8e1":"#fff",height:90,verticalAlign:"middle",wordBreak:"break-word"}}>
+                    {isPhoto&&<div style={{fontSize:13,marginBottom:3}}>📸</div>}
+                    <div>{text}</div>
+                    {isMarked&&<div style={{fontSize:13,marginTop:3}}>✅</div>}
+                  </td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p style={{textAlign:"center",marginTop:16,fontSize:11,color:"#999"}}>📱 Deel je screenshot in de team WhatsApp!</p>
+        <div style={{textAlign:"center",marginTop:20}} className="no-print">
+          <button onClick={()=>setPrintMode(false)} style={{padding:"10px 24px",borderRadius:12,border:"2px solid #c94f00",background:"#fff",color:"#c94f00",fontSize:15,fontWeight:700,cursor:"pointer"}}>← Terug naar bingo</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{minHeight:"100vh",position:"relative",fontFamily:"'Fredoka One',cursive"}}>
+      <div className="bg-layer" style={{background:css}}/>
+      <div className="overlay"/>
+      <div className="content" style={{maxWidth:570,width:"100%"}}>
+
+        <div className="glass" style={{borderRadius:22,padding:"12px 18px",marginBottom:11,width:"100%"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+            <button onClick={onReset} style={{background:"rgba(255,255,255,0.2)",border:"1.5px solid rgba(255,255,255,0.4)",borderRadius:10,padding:"5px 10px",fontSize:11,cursor:"pointer",color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:700,whiteSpace:"nowrap"}}>← Terug</button>
+            <div style={{flex:1,textAlign:"center",minWidth:0}}>
+              <span className="spin" style={{fontSize:24}}>☀️</span>
+              <h1 style={{margin:"1px 0 0",fontSize:"clamp(18px,5vw,28px)",color:"#fff",textShadow:"0 2px 12px rgba(0,0,0,0.5)"}}>Summer Survival</h1>
+              <p style={{margin:"1px 0 0",color:"rgba(255,255,255,0.85)",fontFamily:"'Nunito',sans-serif",fontSize:11,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{playerName} · Kaart {card.cardNumber} · {emoji} {bgName}</p>
+            </div>
+            <button onClick={handlePrint} style={{background:"rgba(255,226,89,0.75)",border:"1.5px solid rgba(255,210,0,0.6)",borderRadius:10,padding:"5px 10px",fontSize:11,cursor:"pointer",color:"#1a1a2e",fontFamily:"'Nunito',sans-serif",fontWeight:800,whiteSpace:"nowrap"}}>🖨️ Print</button>
+          </div>
+        </div>
+
+        <div className="glass" style={{borderRadius:15,padding:"9px 14px",marginBottom:10,width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
+          <span style={{color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:13}}>
+            📸 Foto-bewijs: <span style={{color:hasEnoughPhotos?"#ffe259":"#ffaaaa",fontSize:19}}>{photoCount}</span>/3
+          </span>
+          <div style={{display:"flex",gap:4}}>
+            {Array.from({length:Math.max(photoCount,3)},(_,i)=><span key={i} style={{fontSize:15,opacity:i<photoCount?1:0.2}}>📸</span>)}
+          </div>
+          <span style={{marginLeft:"auto",fontFamily:"'Nunito',sans-serif",fontSize:10,fontWeight:700,color:saveStatus==="saved"?"rgba(150,255,200,0.9)":saveStatus==="saving"?"rgba(255,230,100,0.9)":"rgba(255,150,150,0.9)"}}>
+            {saveStatus==="saved"?"✓ Opgeslagen":saveStatus==="saving"?"⏳ Opslaan…":"⚠️ Fout — check internet"}
+          </span>
+          {!hasEnoughPhotos&&<span style={{color:"rgba(255,200,200,0.9)",fontFamily:"'Nunito',sans-serif",fontSize:11,width:"100%"}}>Vink nog {3-photoCount} 📸-item{3-photoCount!==1?"s":""} aan om bingo te claimen</span>}
+        </div>
+
+        {bingo?(
+          <div className="pop float glass" style={{borderRadius:16,padding:"11px 22px",marginBottom:11,fontSize:22,color:"#1a1a2e",letterSpacing:1.5,textAlign:"center",background:"rgba(255,226,89,0.93)",border:"2px solid rgba(255,200,0,0.9)"}}>
+            🎉 BINGO, {playerName}! 🎉<br/>
+            <span style={{fontFamily:"'Nunito',sans-serif",fontSize:12,fontWeight:800}}>Screenshot maken en delen in de WhatsApp! 📱</span>
+          </div>
+        ):bingoLines.length>0&&!hasEnoughPhotos?(
+          <div className="glass" style={{borderRadius:13,padding:"9px 14px",marginBottom:10,color:"#fff",fontFamily:"'Nunito',sans-serif",fontWeight:800,fontSize:12,background:"rgba(200,40,40,0.6)",textAlign:"center"}}>
+            🚫 Rij vol — maar nog geen 3 📸-items aangevinkt!
+          </div>
+        ):null}
+
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:7,width:"100%",marginBottom:11,opacity:loaded?1:0.5}}>
+          {card.cells.map((text,idx)=>{
+            const isOn=marked.has(idx),isPhoto=PHOTO_PROOF_ITEMS.has(text),isGlow=bingoCells.has(idx);
+            return (
+              <div key={idx} onClick={()=>toggle(idx)} className={`cell${isOn?" on":""}${isGlow?" glow":""}`}
+                style={{background:isOn?(isPhoto?"rgba(255,195,0,0.85)":"rgba(255,226,89,0.75)"):(isPhoto?"rgba(255,255,255,0.28)":"rgba(255,255,255,0.16)"),backdropFilter:"blur(10px)",borderRadius:13,border:isOn?"2px solid rgba(255,210,0,0.95)":(isPhoto?"2px solid rgba(255,200,80,0.5)":"1.5px solid rgba(255,255,255,0.3)"),minHeight:76,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"8px 6px",textAlign:"center"}}>
+                {isPhoto&&<span style={{position:"absolute",top:4,right:5,fontSize:12}}>📸</span>}
+                {isOn&&<span style={{position:"absolute",top:3,left:5,fontSize:14}}>✅</span>}
+                <span style={{fontSize:"clamp(8px,2.3vw,11px)",fontFamily:"'Nunito',sans-serif",fontWeight:800,color:isOn?"#1a1a2e":"#fff",textShadow:isOn?"none":"0 1px 7px rgba(0,0,0,0.65)",lineHeight:1.3}}>{text}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        <button onClick={()=>{clearSession();onReset();}} style={{background:"rgba(0,0,0,0.2)",border:"1.5px solid rgba(255,255,255,0.3)",borderRadius:10,padding:"6px 14px",fontSize:11,cursor:"pointer",color:"rgba(255,255,255,0.85)",fontFamily:"'Nunito',sans-serif",fontWeight:700,marginBottom:8}}>
+          👤 Andere speler / wissel apparaat
+        </button>
+
+        <div className="glass" style={{borderRadius:13,padding:"8px 14px",width:"100%",textAlign:"center"}}>
+          <p style={{margin:0,fontFamily:"'Nunito',sans-serif",fontSize:11,color:"rgba(255,255,255,0.85)",fontWeight:700}}>🎯 Bingo bij 1 rij · 📸 Min. 3 foto-items · 📱 Screenshot → WhatsApp!</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [state,setState]=useState({player:null,savedName:"",savedCard:1,ready:false});
+  useEffect(()=>{
+    const s=loadSession();
+    setState(s&&s.name?{player:null,savedName:s.name,savedCard:(s.cardIndex||0)+1,ready:true}:{player:null,savedName:"",savedCard:1,ready:true});
+  },[]);
+  if(!state.ready)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(145deg,#0f4c75,#1b6ca8)",color:"#fff",fontSize:20,fontFamily:"system-ui"}}>☀️ Laden…</div>;
+  if(state.player)return <BingoCard playerName={state.player.name} cardIndex={state.player.cardIndex} onReset={()=>setState(s=>({...s,player:null}))}/>;
+  return <StartScreen
+    onStart={(n,c)=>setState(s=>({...s,player:{name:n,cardIndex:c},savedName:n,savedCard:c+1}))}
+    initialName={state.savedName} initialCard={state.savedCard}
+    onResetAll={()=>setState({player:null,savedName:"",savedCard:1,ready:true})}
+  />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
