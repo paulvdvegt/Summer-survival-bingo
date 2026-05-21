@@ -556,7 +556,23 @@ function App() {
   const [state,setState]=useState({player:null,savedName:"",savedCard:1,ready:false});
   useEffect(()=>{
     const s=loadSession();
-    setState(s&&s.name?{player:null,savedName:s.name,savedCard:(s.cardIndex||0)+1,ready:true}:{player:null,savedName:"",savedCard:1,ready:true});
+    if(s&&s.name){
+      // Verify session still exists in Supabase (may have been reset)
+      loadProgress(s.name).then(data=>{
+        if(data){
+          setState({player:null,savedName:s.name,savedCard:(s.cardIndex||0)+1,ready:true});
+        } else {
+          // Session was reset — clear local storage too
+          clearSession();
+          setState({player:null,savedName:"",savedCard:1,ready:true});
+        }
+      }).catch(()=>{
+        // Network error — still show session from localStorage
+        setState({player:null,savedName:s.name,savedCard:(s.cardIndex||0)+1,ready:true});
+      });
+    } else {
+      setState({player:null,savedName:"",savedCard:1,ready:true});
+    }
   },[]);
   if(!state.ready)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(145deg,#0f4c75,#1b6ca8)",color:"#fff",fontSize:20,fontFamily:"system-ui"}}>☀️ Laden…</div>;
   if(state.player)return <BingoCard playerName={state.player.name} cardIndex={state.player.cardIndex} onReset={()=>setState(s=>({...s,player:null}))}/>;
