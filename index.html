@@ -217,7 +217,7 @@ function StartScreen({onStart,initialName="",initialCard=1,onResetAll}) {
 
   useEffect(()=>{
     refresh();
-    const t=setInterval(refresh,8000);
+    const t=setInterval(refresh,2000);
     return ()=>clearInterval(t);
   },[refresh]);
 
