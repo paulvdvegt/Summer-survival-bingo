@@ -561,7 +561,11 @@ function App() {
   if(!state.ready)return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(145deg,#0f4c75,#1b6ca8)",color:"#fff",fontSize:20,fontFamily:"system-ui"}}>☀️ Laden…</div>;
   if(state.player)return <BingoCard playerName={state.player.name} cardIndex={state.player.cardIndex} onReset={()=>setState(s=>({...s,player:null}))}/>;
   return <StartScreen
-    onStart={(n,c)=>setState(s=>({...s,player:{name:n,cardIndex:c},savedName:n,savedCard:c+1}))}
+    onStart={(n,c)=>{
+      setState(s=>({...s,player:{name:n,cardIndex:c},savedName:n,savedCard:c+1}));
+      // Register immediately so card shows as taken for others
+      saveProgress(n,c,[],false).catch(console.error);
+    }}
     initialName={state.savedName} initialCard={state.savedCard}
     onResetAll={()=>setState({player:null,savedName:"",savedCard:1,ready:true})}
   />;
