@@ -130,12 +130,19 @@ function clearSession() { try { localStorage.removeItem("bingo_session"); } catc
 
 async function saveProgress(name, cardIndex, markedArr, bingo) {
   const trimmed = (name||"").trim();
-  if (!trimmed) { console.warn("saveProgress: empty name, skipping"); return; }
-  await sbFetch("bingo_progress?on_conflict=name", {
+  if (!trimmed) { console.warn("[BINGO] saveProgress: empty name, skipping"); return; }
+  console.log("[BINGO] Saving:", { name: trimmed, cardIndex, markedCount: markedArr.length, bingo });
+  // Use return=representation so we can verify what was actually saved
+  const result = await sbFetch("bingo_progress?on_conflict=name", {
     method: "POST",
-    headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal" },
+    headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation" },
     body: JSON.stringify({ name: trimmed, card_index:cardIndex, marked:markedArr, bingo, updated_at:new Date().toISOString() }),
   });
+  console.log("[BINGO] Save response:", result);
+  if (!result || (Array.isArray(result) && result.length === 0)) {
+    throw new Error("Save returned no data — possibly blocked by RLS or constraint");
+  }
+  return result;
 }
 async function loadProgress(name) {
   try {
@@ -473,28 +480,30 @@ function BingoCard({playerName,cardIndex,onReset}) {
   const maxWaitTimer = useRef(null);
 
   const flushSave = useCallback(async()=>{
-    if (!pendingSave.current) return;
-    const { name, cardIdx, marked: markedArr, bingo } = pendingSave.current;
+    if (!pendingSave.current) {
+      console.log("[BINGO] flushSave called but nothing pending");
+      return;
+    }
+    const snapshot = pendingSave.current;
+    const { name, cardIdx, marked: markedArr, bingo } = snapshot;
     setSaveStatus("saving");
     try {
       await saveProgress(name, cardIdx, markedArr, bingo);
-      // Only clear pending if nothing new came in during the request
-      if (pendingSave.current &&
-          pendingSave.current.marked === markedArr &&
-          pendingSave.current.bingo === bingo) {
+      // Only clear pending if it's still the same snapshot we just saved
+      if (pendingSave.current === snapshot) {
         pendingSave.current = null;
         setSaveStatus("saved");
         if (maxWaitTimer.current) { clearTimeout(maxWaitTimer.current); maxWaitTimer.current = null; }
+        console.log("[BINGO] Save complete, queue cleared");
       } else {
-        // New data arrived during save — flush again
+        console.log("[BINGO] New data arrived during save, flushing again");
         flushSave();
       }
     } catch(e) {
-      console.error("Save failed, will retry", e);
+      console.error("[BINGO] Save failed, will retry in 3s:", e.message);
       setSaveStatus("error");
-      // Retry with exponential backoff: 2s, then keep at 5s
       if (retryTimer.current) clearTimeout(retryTimer.current);
-      retryTimer.current = setTimeout(flushSave, 5000);
+      retryTimer.current = setTimeout(flushSave, 3000);
     }
   }, []);
 
