@@ -130,19 +130,12 @@ function clearSession() { try { localStorage.removeItem("bingo_session"); } catc
 
 async function saveProgress(name, cardIndex, markedArr, bingo) {
   const trimmed = (name||"").trim();
-  if (!trimmed) { console.warn("[BINGO] saveProgress: empty name, skipping"); return; }
-  console.log("[BINGO] Saving:", { name: trimmed, cardIndex, markedCount: markedArr.length, bingo });
-  // Use return=representation so we can verify what was actually saved
-  const result = await sbFetch("bingo_progress?on_conflict=name", {
+  if (!trimmed) return;
+  await sbFetch("bingo_progress?on_conflict=name", {
     method: "POST",
-    headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates,return=representation" },
+    headers: { ...SB_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify({ name: trimmed, card_index:cardIndex, marked:markedArr, bingo, updated_at:new Date().toISOString() }),
   });
-  console.log("[BINGO] Save response:", result);
-  if (!result || (Array.isArray(result) && result.length === 0)) {
-    throw new Error("Save returned no data — possibly blocked by RLS or constraint");
-  }
-  return result;
 }
 async function loadProgress(name) {
   try {
@@ -473,66 +466,6 @@ function BingoCard({playerName,cardIndex,onReset}) {
     return ()=>{ mounted=false; clearInterval(t); };
   },[playerName,cardIndex]);
 
-  // Pending save state: holds the LATEST data that needs to be sent
-  // If save fails, we keep retrying with the latest state
-  const pendingSave = useRef(null);
-  const retryTimer = useRef(null);
-  const maxWaitTimer = useRef(null);
-
-  const flushSave = useCallback(async()=>{
-    if (!pendingSave.current) {
-      console.log("[BINGO] flushSave called but nothing pending");
-      return;
-    }
-    const snapshot = pendingSave.current;
-    const { name, cardIdx, marked: markedArr, bingo } = snapshot;
-    setSaveStatus("saving");
-    try {
-      await saveProgress(name, cardIdx, markedArr, bingo);
-      // Only clear pending if it's still the same snapshot we just saved
-      if (pendingSave.current === snapshot) {
-        pendingSave.current = null;
-        setSaveStatus("saved");
-        if (maxWaitTimer.current) { clearTimeout(maxWaitTimer.current); maxWaitTimer.current = null; }
-        console.log("[BINGO] Save complete, queue cleared");
-      } else {
-        console.log("[BINGO] New data arrived during save, flushing again");
-        flushSave();
-      }
-    } catch(e) {
-      console.error("[BINGO] Save failed, will retry in 3s:", e.message);
-      setSaveStatus("error");
-      if (retryTimer.current) clearTimeout(retryTimer.current);
-      retryTimer.current = setTimeout(flushSave, 3000);
-    }
-  }, []);
-
-  // Try to flush pending save when window regains focus or comes online
-  useEffect(()=>{
-    const tryFlush = () => { if (pendingSave.current) flushSave(); };
-    window.addEventListener("online", tryFlush);
-    window.addEventListener("focus", tryFlush);
-    document.addEventListener("visibilitychange", tryFlush);
-    return ()=>{
-      window.removeEventListener("online", tryFlush);
-      window.removeEventListener("focus", tryFlush);
-      document.removeEventListener("visibilitychange", tryFlush);
-    };
-  },[flushSave]);
-
-  // Warn user if they try to close the tab with unsaved changes
-  useEffect(()=>{
-    const handler = (e) => {
-      if (pendingSave.current) {
-        e.preventDefault();
-        e.returnValue = "Je voortgang wordt nog opgeslagen. Even wachten voor je afsluit!";
-        return e.returnValue;
-      }
-    };
-    window.addEventListener("beforeunload", handler);
-    return ()=>window.removeEventListener("beforeunload", handler);
-  },[]);
-
   const toggle=useCallback((idx)=>{
     if(!loaded)return;
     setMarked(prev=>{
@@ -541,28 +474,21 @@ function BingoCard({playerName,cardIndex,onReset}) {
       const nm=[...s];
       const ph=card.cells.filter((t,i)=>PHOTO_PROOF_ITEMS.has(t)&&s.has(i)).length;
       const b=getBingoLines(s).length>0&&ph>=3;
-      // 1. Save to local cache IMMEDIATELY (cannot fail)
+      // Save to local cache immediately (cannot fail)
       const cacheKey = `bingo_cache_${playerName}_${cardIndex}`;
       try { localStorage.setItem(cacheKey, JSON.stringify(nm)); } catch{}
-      // 2. Queue the save (overwrites any pending)
-      pendingSave.current = { name: playerName, cardIdx: cardIndex, marked: nm, bingo: b };
+      // Debounced save: each click resets the 2s timer
       setSaveStatus("saving");
-      // 3. Debounce: clear any existing retry, start a fresh 600ms timer
       if(saveTimer.current)clearTimeout(saveTimer.current);
-      if(retryTimer.current)clearTimeout(retryTimer.current);
-      // Debounce: every click resets the 2s timer
-      // But: maxWait ensures we save at least every 5s even if user keeps clicking
-      saveTimer.current=setTimeout(flushSave, 2000);
-      if (!maxWaitTimer.current) {
-        maxWaitTimer.current = setTimeout(()=>{
-          maxWaitTimer.current = null;
-          if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-          flushSave();
-        }, 5000);
-      }
+      saveTimer.current=setTimeout(()=>{
+        saveProgress(playerName,cardIndex,nm,b)
+          .then(()=>setSaveStatus("saved"))
+          .catch(()=>setSaveStatus("error"));
+      },2000);
       return s;
     });
-  },[playerName,cardIndex,card.cells,loaded,flushSave]);
+  },[playerName,cardIndex,card.cells,loaded]);
+
 
   const handlePrint=()=>{
     setPrintMode(true);
@@ -722,9 +648,16 @@ function App() {
           alert(`⚠️ Kaart ${c+1} is net gepakt door ${conflict.name}!\nKies een andere kaart.`);
           return;
         }
-      } catch(e) { console.error("Pre-claim check failed",e); }
-      setState(s=>({...s,player:{name:trimmedName,cardIndex:c},savedName:trimmedName,savedCard:c+1}));
-      saveProgress(trimmedName,c,[],false).catch(console.error);
+        setState(s=>({...s,player:{name:trimmedName,cardIndex:c},savedName:trimmedName,savedCard:c+1}));
+        // Only register if this player doesn't exist yet (preserves progress on re-entry)
+        const existing = all.find(p=>p.name===trimmedName);
+        if (!existing) {
+          saveProgress(trimmedName,c,[],false).catch(console.error);
+        }
+      } catch(e) {
+        console.error("Pre-claim check failed",e);
+        setState(s=>({...s,player:{name:trimmedName,cardIndex:c},savedName:trimmedName,savedCard:c+1}));
+      }
     }}
     initialName={state.savedName} initialCard={state.savedCard}
     onResetAll={()=>setState({player:null,savedName:"",savedCard:1,ready:true})}
